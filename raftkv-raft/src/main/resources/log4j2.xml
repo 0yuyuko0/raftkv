@@ -1,0 +1,22 @@
+<configuration status="WARN" monitorInterval="30">
+    <Properties>
+        <!--自定义一些常量，之后使用${变量名}引用-->
+        <Property name="logFilePath">log</Property>
+        <Property name="logFileName">test.log</Property>
+    </Properties>
+    <!--appenders:定义输出内容,输出格式,输出方式,日志保存策略等,常用其下三种标签[console,File,RollingFile]-->
+    <appenders>
+        <!--console :控制台输出的配置-->
+        <console name="Console" target="SYSTEM_OUT">
+            <!--PatternLayout :输出日志的格式,LOG4J2定义了输出代码,详见第二部分-->
+            <PatternLayout pattern="[%d{HH:mm:ss:SSS}] [%p] - %l - %m%n"/>
+        </console>
+    </appenders>
+    <!--然后定义logger，只有定义了logger并引入的appender，appender才会生效-->
+    <loggers>
+        <!-- Root节点用来指定项目的根日志，如果没有单独指定Logger，那么就会默认使用该Root日志输出 -->
+        <root level="info">
+            <appender-ref ref="Console"/>
+        </root>
+    </loggers>
+</configuration>
