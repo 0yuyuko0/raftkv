@@ -4,38 +4,45 @@ import com.yuyuko.raftkv.raft.RaftException;
 import com.yuyuko.raftkv.raft.core.ConfState;
 import com.yuyuko.raftkv.raft.core.Config;
 import com.yuyuko.raftkv.raft.core.Entry;
+import com.yuyuko.raftkv.raft.core.Message;
 import com.yuyuko.raftkv.raft.node.*;
 import com.yuyuko.raftkv.raft.read.ReadState;
 import com.yuyuko.raftkv.raft.storage.MemoryStorage;
 import com.yuyuko.raftkv.raft.storage.Snapshot;
 import com.yuyuko.raftkv.raft.utils.Tuple;
 import com.yuyuko.raftkv.raft.utils.Utils;
+import com.yuyuko.raftkv.remoting.peer.PeerMessageProcessor;
+import com.yuyuko.raftkv.remoting.peer.PeerMessageSender;
 import com.yuyuko.raftkv.remoting.server.NettyServer;
-import com.yuyuko.utils.concurrent.Chan;
-import com.yuyuko.utils.concurrent.Select;
+import com.yuyuko.raftkv.server.server.Server;
+import com.yuyuko.raftkv.server.utils.Triple;
+import com.yuyuko.selector.Channel;
+import com.yuyuko.selector.SelectionKey;
+import com.yuyuko.selector.Selector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
 import java.util.*;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Collectors;
 
-public class RaftNode {
+import static com.yuyuko.selector.SelectionKey.read;
+
+public class RaftNode implements PeerMessageProcessor {
     private static final Logger log = LoggerFactory.getLogger(RaftNode.class);
 
-    private Chan<byte[]> proposeChan;
+    private Channel<byte[]> proposeChan;
 
-    private Chan<byte[]> readIndexChan;
+    private Channel<byte[]> readIndexChan;
 
-    private Chan<ReadState> readStateChan;
+    private Channel<ReadState> readStateChan;
 
-    private Chan<ConfChange> confChangeChan;
-
-    private Chan<byte[]> commitChan;
+    private Channel<byte[]> commitChan;
 
     private long id;
 
-    private List<String> peers;
+    private List<Long> peers;
 
     private long lastIndex;
 
@@ -49,34 +56,27 @@ public class RaftNode {
 
     private MemoryStorage storage = MemoryStorage.newMemoryStorage();
 
-    private Timer timer = new Timer("tick-task", true);
+    private Timer timer = new Timer("TickTask", true);
 
-    public static volatile RaftNode globalInstance;
-
-    public static Tuple<Chan<byte[]>, Chan<ReadState>> newRaftNode(long id, List<String> peers,
-                                                                   Chan<byte[]> proposeChan,
-                                                                   Chan<byte[]> readIndexChan,
-                                                                   Chan<ConfChange> confChangeChan) {
+    public static Triple<Channel<byte[]>, Channel<ReadState>, PeerMessageProcessor> newRaftNode(long id,
+                                                                                                List<Long> peers,
+                                                                                                Channel<byte[]> proposeChan,
+                                                                                                Channel<byte[]> readIndexChan) {
         RaftNode raftNode = new RaftNode();
         raftNode.proposeChan = proposeChan;
         raftNode.readIndexChan = readIndexChan;
-        raftNode.confChangeChan = confChangeChan;
-        raftNode.commitChan = new Chan<>();
-        raftNode.readStateChan = new Chan<>();
+        raftNode.commitChan = new Channel<>();
+        raftNode.readStateChan = new Channel<>();
         raftNode.id = id;
         raftNode.peers = peers;
 
         raftNode.startRaft();
-        globalInstance = raftNode;
-
-        return new Tuple<>(raftNode.commitChan, raftNode.readStateChan);
+        return new Triple<>(raftNode.commitChan, raftNode.readStateChan, raftNode);
     }
 
     private void startRaft() {
-        List<Peer> rPeers = new ArrayList<>();
-        for (int i = 0; i < peers.size(); i++) {
-            rPeers.add(new Peer(((long) (i + 1)), null));
-        }
+        List<Peer> rPeers =
+                peers.stream().map(id -> new Peer(id, null)).collect(Collectors.toList());
         Config config = new Config();
         config.setId(this.id);
         config.setCheckQuorum(true);
@@ -99,75 +99,57 @@ public class RaftNode {
         snapshotIndex = snapshot.getMetadata().getIndex();
         appliedIndex = snapshot.getMetadata().getIndex();
 
-        final Chan<Object> tickChan = new Chan<>();
+        final Channel<Object> tickChan = new Channel<>();
         timer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-                tickChan.send(null);
+                tickChan.write(null);
             }
         }, 0, 1);
 
-        final ReentrantLock tickLock;
-        try {
-            Chan<Ready> ready = node.ready();
-            Field lockF = null;
-            lockF = ready.getClass().getDeclaredField("lock");
-            lockF.setAccessible(true);
-            tickLock = (ReentrantLock) lockF.get(ready);
-            //这是怎么一回事？？？
-        } catch (NoSuchFieldException | IllegalAccessException e) {
-            throw new RuntimeException();
-        }
-
         Thread thread = new Thread(() -> {
-            while (proposeChan != null && confChangeChan != null && readIndexChan != null) {
-                Select.select()
-                        .forChan(proposeChan)
-                        .read(bytes -> {
-                            if (bytes == null)
-                                proposeChan = null;
-                            else
-                                node.propose(bytes);
-                        })
-                        .forChan(readIndexChan)
-                        .read(bytes -> {
-                            if (bytes == null)
-                                readIndexChan = null;
-                            else
-                                node.readIndex(bytes);
-                        })
-                        .forChan(confChangeChan)
-                        .read(cc -> {
-                            if (cc == null)
-                                confChangeChan = null;
-                            else
-                                node.proposeConfChange(cc);
-                        })
-                        .start();
+            while (proposeChan != null && readIndexChan != null) {
+                SelectionKey<?> key = Selector.open()
+                        .register(proposeChan, read())
+                        .register(readIndexChan, read())
+                        .select();
+                if (key.channel() == proposeChan) {
+                    byte[] bytes = key.data(byte[].class);
+                    if (bytes == null)
+                        proposeChan = null;
+                    else
+                        node.propose(bytes);
+                } else if (key.channel() == readIndexChan) {
+                    byte[] bytes = key.data(byte[].class);
+                    if (bytes == null)
+                        readIndexChan = null;
+                    else
+                        node.readIndex(bytes);
+                } else
+                    throw new RuntimeException();
             }
         });
         thread.setName("RaftNodeProposeThread");
         thread.start();
 
         while (true) {
-            Select
-                    .select()
-                    .forChan(tickChan).read(data -> {
-                //bug，只能这样修复了
-                if (tickLock.isHeldByCurrentThread()) {
-                    tickLock.unlock();
-                }
+            SelectionKey<?> key = Selector.open()
+                    .register(tickChan, read())
+                    .register(node.ready(), read())
+                    .select();
+            if (key.channel() == tickChan)
                 node.tick();
-            }).forChan(node.ready()).read(rd -> {
+            else if (key.channel() == node.ready()) {
+                Ready rd = key.data(Ready.class);
                 storage.append(rd.getEntries());
                 if (Utils.notEmpty(rd.getMessages())) {
-                    while (NettyServer.getGlobalInstance() == null) Thread.onSpinWait();
-                    NettyServer.getGlobalInstance().sendMessageToPeer(rd.getMessages());
+                    Server.sendMessageToPeer(rd.getMessages());
                 }
                 publishEntries(entriesToApply(rd.getCommittedEntries()));
                 publishReadStates(rd.getReadStates());
                 node.advance();
-            }).start();
+            } else
+                throw new RuntimeException();
         }
     }
 
@@ -175,7 +157,7 @@ public class RaftNode {
         if (readStates == null)
             return;
         for (ReadState readState : readStates) {
-            readStateChan.send(readState);
+            readStateChan.write(readState);
         }
     }
 
@@ -197,24 +179,21 @@ public class RaftNode {
         if (entries == null) return;
         for (Entry entry : entries) {
             switch (entry.getType()) {
-                case ConfChange:
+/*                case ConfChange:
                     ConfChange confChange = ConfChange.unmarshal(entry.getData());
                     node.applyConfChange(confChange);
-                    break;
+                    break;*/
                 case Normal:
                     if (entry.getData() == null)
                         break;
-                    commitChan.send(entry.getData());
+                    commitChan.write(entry.getData());
             }
             appliedIndex = entry.getIndex();
         }
     }
 
-    public Node getNode() {
-        return node;
-    }
-
-    public static RaftNode getGlobalInstance() {
-        return globalInstance;
+    @Override
+    public void process(Message message) {
+        node.step(message);
     }
 }

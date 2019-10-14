@@ -1,12 +1,14 @@
-package com.yuyuko.raftkv.remoting.util;
+package com.yuyuko.raftkv.server.utils;
 
-public class Pair<F, S> {
+public class Triple<F, S, T> {
     private F first;
     private S second;
+    private T third;
 
-    public Pair(F first, S second) {
+    public Triple(F first, S second, T third) {
         this.first = first;
         this.second = second;
+        this.third = third;
     }
 
     public F getFirst() {
@@ -15,5 +17,9 @@ public class Pair<F, S> {
 
     public S getSecond() {
         return second;
+    }
+
+    public T getThird() {
+        return third;
     }
 }

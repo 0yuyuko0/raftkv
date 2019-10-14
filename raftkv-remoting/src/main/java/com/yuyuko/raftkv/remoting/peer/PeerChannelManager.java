@@ -9,20 +9,18 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class PeerChannelManager implements ChannelManager<Long> {
-    private static final Logger log = LoggerFactory.getLogger(PeerChannelManager.class);
-
     private final Map<Long, ChannelHandlerContext> map = new ConcurrentHashMap<>();
 
-    private static final PeerChannelManager manager = new PeerChannelManager();
-
-    public static PeerChannelManager getInstance() {
-        return manager;
-    }
-
     @Override
-    public void registerChannel(Long id, ChannelHandlerContext ctx) {
-        if (map.putIfAbsent(id, ctx) == null)
-            log.info("peer {} connect to server", id);
+    public boolean registerChannel(Long id, ChannelHandlerContext ctx) {
+        synchronized (map) {
+            ChannelHandlerContext old = map.get(id);
+            if (old == null) {
+                map.put(id, ctx);
+                return true;
+            }
+            return false;
+        }
     }
 
     @Override
@@ -31,7 +29,7 @@ public class PeerChannelManager implements ChannelManager<Long> {
     }
 
     @Override
-    public void removeChannel(Long id) {
-        map.remove(id);
+    public boolean removeChannel(Long id) {
+        return map.remove(id) != null;
     }
 }

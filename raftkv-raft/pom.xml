@@ -12,11 +12,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>raftkv-raft</artifactId>
+    <version>1.0.0</version>
 
     <dependencies>
         <dependency>
-            <groupId>com.yuyuko.utils</groupId>
-            <artifactId>go-chan-and-select</artifactId>
+            <groupId>com.yuyuko.selector</groupId>
+            <artifactId>selector</artifactId>
         </dependency>
 
         <dependency>

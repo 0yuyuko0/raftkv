@@ -49,8 +49,6 @@ public class Raft {
 
     private long lead;
 
-    private boolean pendingConf;
-
     private ReadOnly readOnly;
 
     /**
@@ -196,24 +194,6 @@ public class Raft {
 
             case MsgHup:
                 if (state != Node.NodeState.Leader) {
-                    List<Entry> unAppliedEnts;
-                    try {
-                        // 当前不是leader
-                        // 取出[applied+1,committed+1]之间的消息，即得到还未进行applied的日志列表
-                        unAppliedEnts = raftLog.slice(raftLog.getApplied() + 1,
-                                raftLog.getCommitted() + 1, UNLIMIT);
-                    } catch (Throwable e) {
-                        LOGGER.error("unexpected error getting unapplied entries");
-                        throw e;
-                    }
-                    int n;
-                    // 如果其中有config消息，并且commited > applied，说明当前还有没有apply的config消息，
-                    // 这种情况下不能开始投票
-                    if ((n = numOfPendingConf(unAppliedEnts)) != 0 && raftLog.getCommitted() > raftLog.getApplied()) {
-                        LOGGER.warn("{} cannot campaign at term {} since there are still {} " +
-                                "pending configuration changes to apply", id, term, n);
-                        return;
-                    }
                     LOGGER.info("{} is starting a new election at term {}", id, term);
 
                     // 进行选举
@@ -359,13 +339,6 @@ public class Raft {
         tickFunc = tickHeartBeat();
         lead = id;
         state = Node.NodeState.Leader;
-        List<Entry> entries = raftLog.entries(((int) (raftLog.getCommitted() + 1)), UNLIMIT);
-        // 变成leader之前，这里还有没commit的配置变化消息
-        int nConf = numOfPendingConf(entries);
-        if (nConf > 1)
-            throw new RaftException("unexpected multiple uncommitted config entry");
-        else if (nConf == 1)
-            pendingConf = true;
         appendEntries(List.of(new Entry()));
         LOGGER.info("{} became leader at term {}", id, term);
     }
@@ -426,13 +399,8 @@ public class Raft {
                 newProgresses.get(id).setMatch(raftLog.lastIndex());
         });
 
-        pendingConf = false;
         progresses = newProgresses;
         readOnly = new ReadOnly();
-    }
-
-    private int numOfPendingConf(List<Entry> entries) {
-        return ((int) entries.stream().filter(entry -> entry.getType() == Entry.EntryType.ConfChange).count());
     }
 
     private void resetRandomizedElectionTimeout() {
@@ -487,7 +455,7 @@ public class Raft {
                         // 这种情况出现在本节点已经通过配置变化被移除出了集群的场景。
                         return;
                     }
-                    loop:
+/*                    loop:
                     while (true) {
                         for (int i = 0; i < m.getEntries().size(); i++) {
                             Entry entry = m.getEntries().get(i);
@@ -511,7 +479,7 @@ public class Raft {
                             }
                         }
                         break;
-                    }
+                    }*/
                     // 添加数据到log中
                     appendEntries(m.getEntries());
                     // 向集群其他节点广播append消息
@@ -767,6 +735,12 @@ public class Raft {
             }
             if (progress.isRecentActive())
                 ++ack;
+            else if (raftLog.getStorage() instanceof MemoryStorage) { //对于内存存储，节点下限之后要把match归0
+                if(progress.getMatch() != 0) {
+                    progress.setMatch(0);
+                    LOGGER.info("progress setMatch 0 for memoryStorage");
+                }
+            }
             progress.setRecentActive(false);
         }
         return ack >= quorum();
@@ -1044,13 +1018,7 @@ public class Raft {
         };
     }
 
-
-    public void resetPendingConf() {
-        pendingConf = false;
-    }
-
     public void addNodes(Long peer) {
-        pendingConf = false;
         progresses.computeIfAbsent(peer, k -> new Progress(0, raftLog.lastIndex() + 1));
     }
 
@@ -1106,10 +1074,6 @@ public class Raft {
 
     public int getHeartbeatTimeout() {
         return heartbeatTimeout;
-    }
-
-    public boolean isPendingConf() {
-        return pendingConf;
     }
 
     public Node.NodeState getState() {

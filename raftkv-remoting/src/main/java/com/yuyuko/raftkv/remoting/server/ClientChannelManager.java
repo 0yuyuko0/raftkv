@@ -16,13 +16,15 @@ public class ClientChannelManager implements ChannelManager<String> {
     }
 
     @Override
-    public void registerChannel(String requestId, ChannelHandlerContext ctx) {
+    public boolean registerChannel(String requestId, ChannelHandlerContext ctx) {
         map.put(requestId, ctx);
+        return true;
     }
 
     @Override
-    public void removeChannel(String requestId) {
+    public boolean removeChannel(String requestId) {
         map.remove(requestId);
+        return true;
     }
 
     @Override

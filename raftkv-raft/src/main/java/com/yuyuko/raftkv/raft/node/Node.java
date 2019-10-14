@@ -2,7 +2,7 @@ package com.yuyuko.raftkv.raft.node;
 
 import com.yuyuko.raftkv.raft.core.ConfState;
 import com.yuyuko.raftkv.raft.core.Message;
-import com.yuyuko.utils.concurrent.Chan;
+import com.yuyuko.selector.Channel;
 
 /**
  * 代表Raft集群中的一个节点
@@ -24,10 +24,10 @@ public interface Node {
      */
     void propose(byte[] data);
 
-    /**
+/*    *//**
      * 提交日志变更
-     */
-    void proposeConfChange(ConfChange cc);
+     *//*
+    void proposeConfChange(ConfChange cc);*/
 
     /**
      * 将消息加入状态机执行
@@ -41,7 +41,7 @@ public interface Node {
      *
      * @return Ready的阻塞队列
      */
-    Chan<Ready> ready();
+    Channel<Ready> ready();
 
     /**
      * Advance函数是当使用者已经将上一次Ready数据处理之后，调用该函数告诉raft库可以进行下一步的操作
@@ -55,12 +55,11 @@ public interface Node {
      */
     void readIndex(byte[] readCtx);
 
-    /**
+/*    *//**
      * 提交配置变更
-     * @param confChange 配置
      * @return 当前配置状态
-     */
-    ConfState applyConfChange(ConfChange confChange);
+     *//*
+    ConfState applyConfChange(ConfChange confChange);*/
 
     Status status();
 

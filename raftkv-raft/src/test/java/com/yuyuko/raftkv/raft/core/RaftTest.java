@@ -7,6 +7,7 @@ import com.yuyuko.raftkv.raft.storage.*;
 import com.yuyuko.raftkv.raft.utils.Tuple;
 import com.yuyuko.raftkv.raft.utils.Utils;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.InvocationHandler;
@@ -1042,7 +1043,7 @@ public class RaftTest {
         assertArrayEquals(wCtx, b.getReadStates().get(0).getRequestCtx());
     }
 
-    @Test
+/*    @Disabled
     void stepConfig() {
         Raft raft = newTestRaft(1, List.of(1L, 2L), 10, 1, newMemoryStorage());
         raft.becomeCandidate();
@@ -1053,9 +1054,9 @@ public class RaftTest {
         );
         assertEquals(raft.getRaftLog().lastIndex(), l + 1);
         assertTrue(raft.isPendingConf());
-    }
+    }*/
 
-    @Test
+/*    @Disabled
     void stepIgnoreConfig() {
         Raft raft = newTestRaft(1, List.of(1L, 2L), 10, 1, newMemoryStorage());
         raft.becomeCandidate();
@@ -1072,7 +1073,7 @@ public class RaftTest {
         assertArrayEquals(wEnts.toArray(),
                 raft.getRaftLog().entries(((int) (l + 1)), UNLIMIT).toArray());
         assertEquals(raft.isPendingConf(), pendingConf);
-    }
+    }*/
 
 
     private String itoa(RaftLog raftLog) {

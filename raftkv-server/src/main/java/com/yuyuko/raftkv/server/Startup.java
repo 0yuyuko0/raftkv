@@ -1,75 +1,66 @@
 package com.yuyuko.raftkv.server;
 
-import com.yuyuko.raftkv.raft.node.ConfChange;
 import com.yuyuko.raftkv.raft.read.ReadState;
 import com.yuyuko.raftkv.raft.utils.Tuple;
-import com.yuyuko.raftkv.remoting.peer.NettyPeer;
-import com.yuyuko.raftkv.remoting.peer.NettyPeerConfig;
+import com.yuyuko.raftkv.remoting.peer.PeerMessageProcessor;
+import com.yuyuko.raftkv.remoting.peer.client.NettyPeerClient;
+import com.yuyuko.raftkv.remoting.peer.client.NettyPeerClientConfig;
 import com.yuyuko.raftkv.remoting.peer.PeerNode;
+import com.yuyuko.raftkv.remoting.peer.server.NettyPeerServerConfig;
+import com.yuyuko.raftkv.remoting.server.ClientRequestProcessor;
 import com.yuyuko.raftkv.remoting.server.NettyServerConfig;
 import com.yuyuko.raftkv.server.raft.RaftKV;
 import com.yuyuko.raftkv.server.raft.RaftNode;
 import com.yuyuko.raftkv.server.server.Server;
-import com.yuyuko.utils.concurrent.Chan;
+import com.yuyuko.raftkv.server.utils.Triple;
+import com.yuyuko.selector.Channel;
 import org.apache.commons.cli.*;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 public class Startup {
     public static void main(String[] args) throws ParseException {
-        CommandLine commandLine = parseCmdLine("raftkv", args);
-        if (commandLine == null)
-            System.exit(-1);
+        Triple<Long, Integer, List<PeerNode>> idPortPeerNodesTriple = parseCmdLine("raftkv", args);
 
-        Server server = createServer(commandLine);
+        Server server = createServer(
+                idPortPeerNodesTriple.getFirst(),
+                idPortPeerNodesTriple.getSecond(),
+                idPortPeerNodesTriple.getThird());
         server.start();
-
     }
 
-    private static Server createServer(CommandLine commandLine) {
-        long id = Long.parseLong(commandLine.getOptionValue("id"));
-        List<String> peers = Arrays.asList(commandLine.getOptionValue("c").split(","));
+    private static Server createServer(long id, int port, List<PeerNode> peerNodes) {
 
-        Chan<byte[]> proposeChan = new Chan<>();
+        Channel<byte[]> proposeChan = new Channel<>();
 
-        Chan<ConfChange> confChangeChan = new Chan<>();
+        Channel<byte[]> readIndexChan = new Channel<>();
 
-        Chan<byte[]> readIndexChan = new Chan<>();
+        Triple<Channel<byte[]>, Channel<ReadState>, PeerMessageProcessor> triple =
+                RaftNode.newRaftNode(id,
+                        peerNodes.stream().map(PeerNode::getId).collect(Collectors.toList()),
+                        proposeChan, readIndexChan);
 
-        Tuple<Chan<byte[]>, Chan<ReadState>> tuple = RaftNode.newRaftNode(id, peers,
-                proposeChan, readIndexChan,
-                confChangeChan);
-        Chan<byte[]> commitChan = tuple.getFirst();
-        Chan<ReadState> readStateChan = tuple.getSecond();
+        ClientRequestProcessor raftKV = new RaftKV(
+                proposeChan,
+                triple.getFirst(),
+                readIndexChan,
+                triple.getSecond());
 
-        new RaftKV(proposeChan, commitChan, readIndexChan, readStateChan);
-
-        NettyServerConfig config = new NettyServerConfig();
-
-        if (commandLine.hasOption("p"))
-            config.setListenPort(Integer.parseInt(commandLine.getOptionValue("p")));
-
-        Server server = new Server(config);
-        server.init(id);
-
-        List<PeerNode> peerNodes = new ArrayList<>();
-        for (int i = 0; i < peers.size(); i++) {
-            String addr = peers.get(i);
-            String[] strs = addr.split(":");
-            String ip = strs[0];
-            int port = Integer.parseInt(strs[1]);
-            peerNodes.add(new PeerNode(i + 1, ip, port));
-        }
-
-        NettyPeer nettyPeer = new NettyPeer(new NettyPeerConfig(), peerNodes);
-        nettyPeer.connectToPeers(id);
-
-        return server;
+        return new Server(id, port, raftKV, peerNodes, triple.getThird());
     }
 
-    private static final CommandLine parseCmdLine(String appName, String[] args) throws ParseException {
+    /**
+     * @param appName
+     * @param args
+     * @return 三元组<节点id ， 端口 ， 集群node>
+     * @throws ParseException
+     */
+    private static final Triple<Long, Integer, List<PeerNode>> parseCmdLine(String appName,
+                                                                            String[] args) throws ParseException {
         HelpFormatter helpFormatter = new HelpFormatter();
         helpFormatter.setWidth(110);
         Options options = buildCommandlineOptions(new Options());
@@ -79,7 +70,28 @@ public class Startup {
         } catch (ParseException e) {
             helpFormatter.printHelp(appName, options, true);
         }
-        return commandLine;
+        if (commandLine == null)
+            System.exit(-1);
+
+        long id = Long.parseLong(commandLine.getOptionValue("id"));
+
+        AtomicInteger idCnt = new AtomicInteger(0);
+
+        int port = 8888;
+
+        List<PeerNode> peerNodes =
+                Arrays.asList(commandLine.getOptionValue("c").split(",")).stream()
+                        .map(addr -> {
+                            String[] strs = addr.split(":");
+                            String ip = strs[0];
+                            int p = Integer.parseInt(strs[1]);
+                            return new PeerNode(idCnt.incrementAndGet(), ip,
+                                    p + NettyPeerServerConfig.PEER_PORT_INCREMENT);
+                        }).collect(Collectors.toList());
+
+        if (commandLine.hasOption("p"))
+            port = Integer.parseInt(commandLine.getOptionValue("p"));
+        return new Triple<>(id, port, peerNodes);
     }
 
     private static final Options buildCommandlineOptions(Options options) {

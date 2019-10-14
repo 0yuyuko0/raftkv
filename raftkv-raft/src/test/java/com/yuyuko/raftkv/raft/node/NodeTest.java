@@ -6,11 +6,14 @@ import com.yuyuko.raftkv.raft.read.ReadState;
 import com.yuyuko.raftkv.raft.storage.MemoryStorage;
 import com.yuyuko.raftkv.raft.storage.Snapshot;
 import com.yuyuko.raftkv.raft.storage.SnapshotMetadata;
-import com.yuyuko.utils.concurrent.Chan;
-import com.yuyuko.utils.concurrent.Select;
+import com.yuyuko.selector.Channel;
+import com.yuyuko.selector.SelectionKey;
+import com.yuyuko.selector.Selector;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,12 +22,14 @@ import java.util.concurrent.TimeUnit;
 
 import static com.yuyuko.raftkv.raft.core.Raft.UNLIMIT;
 import static com.yuyuko.raftkv.raft.storage.MemoryStorage.newMemoryStorage;
+import static com.yuyuko.selector.SelectionKey.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 
 class NodeTest {
 
-    @RepeatedTest(100)
+ /*   @Test
+    @Disabled
     void startNode() {
         ConfChange confChange = new ConfChange(ConfChange.ConfChangeType.AddNode, 1, null);
         byte[] ccBytes = confChange.marshal();
@@ -50,40 +55,40 @@ class NodeTest {
         config.setMaxSizePerMsg(UNLIMIT);
 
         Node node = DefaultNode.startNode(config, List.of(new Peer(1L, null)));
-        Ready g = node.ready().receive();
+        Ready g = node.ready().read();
         assertEquals(wants[0], g, "g = wants[0]");
         storage.append(g.getEntries());
         node.advance();
 
         node.campaign();
-        Ready rd = node.ready().receive();
+        Ready rd = node.ready().read();
         storage.append(rd.getEntries());
         node.advance();
         node.propose("foo".getBytes());
-        Ready g2 = node.ready().receive();
+        Ready g2 = node.ready().read();
         assertEquals(wants[1], g2);
         storage.append(g2.getEntries());
         node.advance();
 
-        Chan<Object> timer = new Chan<>();
+        Channel<Object> timer = new Channel<>();
         new Thread(() -> {
             try {
                 TimeUnit.MILLISECONDS.sleep(1);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
-            timer.send(null);
+            timer.write(null);
         }).start();
 
-        Select.select()
-                .forChan(node.ready())
-                .read(data -> fail("unexpected Ready"))
-                .forChan(timer)
-                .read()
-                .start();
+        SelectionKey<?> key = Selector.open()
+                .register(node.ready(), read())
+                .register(timer, read())
+                .select();
+        if(key.channel() == node.ready())
+            fail("unexpected Ready");
         node.stop();
     }
-
+*/
     @RepeatedTest(100)
     void tick() throws InterruptedException {
         DefaultNode node = DefaultNode.newNode();
@@ -107,7 +112,7 @@ class NodeTest {
     void campaign() {
     }
 
-    @RepeatedTest(10)
+    @RepeatedTest(100)
     /**
      * 无leader的节点会阻塞propose请求直到leader出现
      */
@@ -115,22 +120,23 @@ class NodeTest {
         MemoryStorage storage = newMemoryStorage();
         Raft raft = RaftTest.newTestRaft(1, List.of(1L), 10, 1, storage);
         DefaultNode node = DefaultNode.newNode();
-        Chan<Throwable> chan = new Chan<>(1);
+        Channel<Throwable> chan = new Channel<>(1);
         new Thread(() -> node.run(raft)).start();
         new Thread(() -> {
             try {
                 node.propose("somedata".getBytes());
-                chan.send(null);
+                chan.write(null);
             } catch (Throwable ex) {
-                chan.send(ex);
+                chan.write(ex);
             }
         }).start();
         TimeUnit.MILLISECONDS.sleep(10);
         node.campaign();
 
-        Select.select()
-                .forChan(chan).read(Assertions::assertNull)
-                .start();
+        SelectionKey<?> key = Selector.open()
+                .register(chan, read())
+                .select();
+        assertNull(key.data());
         node.stop();
     }
 
@@ -143,7 +149,7 @@ class NodeTest {
         new Thread(() -> node.run(raft)).start();
         node.campaign();
         while (true) {
-            Ready rd = node.ready().receive();
+            Ready rd = node.ready().read();
             storage.append(rd.getEntries());
             if (rd.getSoftState().getLead() == raft.getId()) {
                 raft.setStepFunc((r, m) -> messages.add(m));
@@ -160,6 +166,7 @@ class NodeTest {
     }
 
     @RepeatedTest(10)
+    @Disabled
     void benchmark() throws InterruptedException {
         long start = System.currentTimeMillis();
         benchmarkOneNode(100000);
@@ -179,7 +186,7 @@ class NodeTest {
             }
         }).start();
         while (true) {
-            Ready rd = node.ready().receive();
+            Ready rd = node.ready().read();
             storage.append(rd.getEntries());
             // a reasonable disk sync latency
             TimeUnit.MILLISECONDS.sleep(1);
@@ -189,7 +196,7 @@ class NodeTest {
         }
     }
 
-    @Test
+/*    @Test
     void proposeConfig() {
         List<Message> messages = new ArrayList<>();
         MemoryStorage storage = newMemoryStorage();
@@ -198,7 +205,7 @@ class NodeTest {
         new Thread(() -> node.run(raft)).start();
         node.campaign();
         while (true) {
-            Ready rd = node.ready().receive();
+            Ready rd = node.ready().read();
             storage.append(rd.getEntries());
             if (rd.getSoftState().getLead() == raft.getId()) {
                 raft.setStepFunc((r, m) -> messages.add(m));
@@ -215,39 +222,41 @@ class NodeTest {
         assertEquals(1, messages.size());
         assertEquals(Message.MessageType.MsgProp, messages.get(0).getType());
         assertArrayEquals(data, messages.get(0).getEntries().get(0).getData());
-    }
+    }*/
 
     @Test
     void step() {
         Message.MessageType[] values = Message.MessageType.values();
         for (int i = 0; i < values.length; i++) {
             DefaultNode node = new DefaultNode();
-            node.setRecvChan(new Chan<>(1));
-            node.setPropChan(new Chan<>(1));
+            node.setRecvChan(new Channel<>(1));
+            node.setPropChan(new Channel<>(1));
             node.step(
                     Message.builder().type(values[i]).build());
             int finalI = i;
 
             if (values[i] == Message.MessageType.MsgProp) {
-                Select
-                        .select()
-                        .forChan(node.getPropChan()).read()
-                        .onDefault(() -> fail(finalI + ""))
-                        .start();
+                SelectionKey<?> key = Selector.open()
+                        .register(node.getPropChan(), read())
+                        .fallback(fallback())
+                        .select();
+                if (key.type() == FALLBACK)
+                    fail(finalI + "");
             } else {
                 if (Message.isLocalMsg(values[i])) {
-                    Select
-                            .select()
-                            .forChan(node.getRecvChan()).read(data -> fail(finalI + ""))
-                            .onDefault(() -> {
-                            })
-                            .start();
+                    SelectionKey<?> key = Selector.open()
+                            .register(node.getRecvChan(), read())
+                            .fallback(fallback())
+                            .select();
+                    if (key.type() == READ)
+                        fail(i + "");
                 } else {
-                    Select
-                            .select()
-                            .forChan(node.getRecvChan()).read()
-                            .onDefault(() -> Assertions.fail(finalI + ""))
-                            .start();
+                    SelectionKey<?> key = Selector.open()
+                            .register(node.getRecvChan(), read())
+                            .fallback(fallback())
+                            .select();
+                    if (key.type() == FALLBACK)
+                        fail(i + "");
                 }
             }
         }
@@ -265,33 +274,34 @@ class NodeTest {
 
         Node node = DefaultNode.startNode(config, List.of(new Peer(1L, null)));
 
-        Ready rd = node.ready().receive();
+        Ready rd = node.ready().read();
         storage.append(rd.getEntries());
         node.advance();
 
         node.campaign();
-        node.ready().receive();
+        node.ready().read();
 
         node.propose("foo".getBytes());
 
-        Chan<Object> timer = new Chan<>();
+        Channel<Object> timer = new Channel<>();
         new Thread(() -> {
             try {
                 TimeUnit.MILLISECONDS.sleep(1);
-                timer.send(null);
+                timer.write(null);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
         }).start();
 
-        Select.select()
-                .forChan(node.ready()).read(data -> fail())
-                .forChan(timer).read()
-                .start();
-
+        SelectionKey<?> key = Selector.open()
+                .register(node.ready(), read())
+                .register(timer, read())
+                .select();
+        if (key.channel() == node.ready())
+            fail();
         storage.append(rd.getEntries());
         node.advance();
-        node.ready().receive();
+        node.ready().read();
     }
 
     @Test
@@ -308,7 +318,7 @@ class NodeTest {
         new Thread(() -> node.run(raft)).start();
         node.campaign();
         while (true) {
-            Ready rd = node.ready().receive();
+            Ready rd = node.ready().read();
             assertArrayEquals(wReadState.toArray(), rd.getReadStates().toArray());
             storage.append(rd.getEntries());
             if (rd.getSoftState().getLead() == raft.getId()) {
@@ -341,7 +351,7 @@ class NodeTest {
                 )
         );
         var testEntries = List.of(new Entry("testdata".getBytes()));
-        // send readindex request to r2(follower)
+        // write readindex request to r2(follower)
         r2.step(
                 Message.builder().from(2).to(2).type(Message.MessageType.MsgReadIndex).entries(testEntries).build()
         );
@@ -351,7 +361,7 @@ class NodeTest {
                 Message.builder().from(2).to(1).type(Message.MessageType.MsgReadIndex).entries(testEntries).build();
         assertEquals(readIdxMsg1, r2.getMessages().get(0));
 
-        // send readindex request to r3(follower)
+        // write readindex request to r3(follower)
         r3.step(
                 Message.builder().from(3).to(3).type(Message.MessageType.MsgReadIndex).entries(testEntries).build()
         );
@@ -410,29 +420,28 @@ class NodeTest {
     void stop() {
         DefaultNode node = DefaultNode.newNode();
         Raft raft = RaftTest.newTestRaft(1, List.of(1L), 10, 1, newMemoryStorage());
-        Chan<Object> donec = new Chan<>();
+        Channel<Object> donec = new Channel<>();
         new Thread(() -> {
             node.run(raft);
-            donec.send(1L);
+            donec.write(1L);
         }).start();
         Status status = node.status();
         node.stop();
-        Chan<Object> timer = new Chan<>();
+        Channel<Object> timer = new Channel<>();
         new Thread(() -> {
             try {
                 TimeUnit.SECONDS.sleep(1);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
-            timer.send(1);
+            timer.write(1);
         }).start();
-        Select
-                .select()
-                .forChan(donec).read()
-                .forChan(timer).read(data -> {
+        SelectionKey<?> key = Selector.open()
+                .register(donec, read())
+                .register(timer, read())
+                .select();
+        if (key.channel() == timer)
             fail("timed out waiting for node to stop!");
-        }).start();
-
         assertNotEquals(new Status(), status);
         // Further status should return be empty, the node is stopped.
         assertEquals(new Status(), node.status());

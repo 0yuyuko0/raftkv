@@ -15,7 +15,7 @@
     <packaging>pom</packaging>
 
     <properties>
-        <go-chan-and-select.version>2.0.0</go-chan-and-select.version>
+        <selector.version>1.1.1</selector.version>
         <slf4j-api.version>1.7.25</slf4j-api.version>
         <log4j-slf4j.version>2.9.1</log4j-slf4j.version>
         <junit-platform-commons.version>1.4.1</junit-platform-commons.version>
@@ -34,9 +34,9 @@
                 <version>${netty-all.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.yuyuko.utils</groupId>
-                <artifactId>go-chan-and-select</artifactId>
-                <version>${go-chan-and-select.version}</version>
+                <groupId>com.yuyuko.selector</groupId>
+                <artifactId>selector</artifactId>
+                <version>${selector.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.dyuproject.protostuff</groupId>

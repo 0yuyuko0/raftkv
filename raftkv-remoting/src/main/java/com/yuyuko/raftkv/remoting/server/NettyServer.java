@@ -1,32 +1,19 @@
 package com.yuyuko.raftkv.remoting.server;
 
-import com.yuyuko.raftkv.raft.core.Message;
-import com.yuyuko.raftkv.remoting.peer.PeerChannelManager;
-import com.yuyuko.raftkv.remoting.peer.PeerConnectionHandler;
-import com.yuyuko.raftkv.remoting.peer.PeerMessageEncoder;
-import com.yuyuko.raftkv.remoting.peer.PeerMessageSender;
-import com.yuyuko.raftkv.remoting.protocol.RequestCode;
-import com.yuyuko.raftkv.remoting.protocol.body.PeerMessage;
 import io.netty.bootstrap.ServerBootstrap;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.*;
-import io.netty.util.ReferenceCountUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class NettyServer implements ServerMessageSender, PeerMessageSender {
+public class NettyServer implements ClientResponseSender {
     private static final Logger log = LoggerFactory.getLogger(NettyServer.class);
 
     private final ServerBootstrap serverBootstrap;
@@ -37,15 +24,12 @@ public class NettyServer implements ServerMessageSender, PeerMessageSender {
 
     private final EventLoopGroup eventLoopGroupSelector;
 
-    private final Map<Integer, NettyRequestProcessor> processors = new ConcurrentHashMap<>();
+    private final long id;
 
-    public static volatile NettyServer globalInstance;
+    private final ClientRequestHandler handler;
 
-    private long id;
-
-    private NettyServerHandler handler;
-
-    public NettyServer(long id, final NettyServerConfig serverConfig) {
+    public NettyServer(long id, final NettyServerConfig serverConfig,
+                       ClientRequestProcessor processor) {
         this.serverBootstrap = new ServerBootstrap();
         this.serverConfig = serverConfig;
         this.eventLoopGroupBoss = new NioEventLoopGroup(1, new ThreadFactory() {
@@ -68,35 +52,7 @@ public class NettyServer implements ServerMessageSender, PeerMessageSender {
                     }
                 });
         this.id = id;
-        this.handler = new NettyServerHandler();
-        globalInstance = this;
-    }
-
-    @Override
-    public void sendMessageToPeer(List<Message> messages) {
-        if (messages == null)
-            return;
-        for (Message message : messages) {
-            ChannelHandlerContext ctx =
-                    PeerChannelManager.getInstance().getChannel(message.getTo());
-            if (ctx == null)
-                continue;
-            try {
-                ctx.writeAndFlush(new PeerMessage(RequestCode.PEER_MESSAGE, message)).addListener(
-                        future -> {
-                            if (!future.isSuccess()) {
-                                ctx.channel().close();
-                                PeerChannelManager.getInstance().removeChannel(message.getTo());
-                                log.warn("send message to peer{} failed,close channel",
-                                        message.getTo());
-                            }
-                        }
-                );
-            } catch (Throwable ex) {
-                log.warn("send message to peer{} failed", message.getTo(),
-                        ex);
-            }
-        }
+        this.handler = new ClientRequestHandler(processor);
     }
 
     @Override
@@ -107,7 +63,7 @@ public class NettyServer implements ServerMessageSender, PeerMessageSender {
         try {
             ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
         } catch (Throwable ex) {
-            log.warn("send response to requestId[{}] failed", requestId,
+            log.warn("[Response to Client Failed],requestId[{}]", requestId,
                     ex);
         } finally {
             ClientChannelManager.getInstance().removeChannel(requestId);
@@ -115,38 +71,27 @@ public class NettyServer implements ServerMessageSender, PeerMessageSender {
     }
 
     @ChannelHandler.Sharable
-    class NettyServerHandler extends SimpleChannelInboundHandler<ClientRequest> {
+    class ClientRequestHandler extends SimpleChannelInboundHandler<ClientRequest> {
+        private final ClientRequestProcessor processor;
+
+        public ClientRequestHandler(ClientRequestProcessor processor) {
+            this.processor = processor;
+        }
 
         @Override
-        protected void channelRead0(ChannelHandlerContext ctx, ClientRequest msg) throws Exception {
-            processMessageReceived(ctx, msg);
+        protected void channelRead0(ChannelHandlerContext ctx, ClientRequest request) throws Exception {
+            ClientChannelManager.getInstance().registerChannel(request.getRequestId(), ctx);
+            processor.processRequest(request);
         }
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-            log.warn("exception in NettyServerHandler", cause);
+            log.warn("[Exception in ClientRequestHandler]", cause);
             ctx.close();
         }
     }
 
-    void processMessageReceived(ChannelHandlerContext ctx, ClientRequest request) {
-        switch (request.getCode()) {
-            case RequestCode.READ:
-            case RequestCode.PROPOSE:
-                ClientChannelManager.getInstance().registerChannel(request.getRequestId(), ctx);
-                break;
-            default:
-        }
-        NettyRequestProcessor requestProcessor = processors.get(request.getCode());
-        requestProcessor.processRequest(request, ctx);
-    }
-
-    public void registerProcessor(int code, NettyRequestProcessor processor) {
-        this.processors.put(code, processor);
-    }
-
     public void start() {
-
         this.serverBootstrap
                 .group(eventLoopGroupBoss, eventLoopGroupSelector)
                 .channel(NioServerSocketChannel.class)
@@ -162,8 +107,6 @@ public class NettyServer implements ServerMessageSender, PeerMessageSender {
                     protected void initChannel(SocketChannel ch) throws Exception {
                         ch.pipeline()
                                 .addLast(
-                                        new NotAcceptByteBufHttpRequestEncoder(),
-                                        new PeerMessageEncoder(),
                                         new HttpResponseEncoder(),
                                         new ClientResponseEncoder(),
                                         new HttpRequestDecoder(),
@@ -176,23 +119,14 @@ public class NettyServer implements ServerMessageSender, PeerMessageSender {
         ChannelFuture sync;
         try {
             sync = this.serverBootstrap.bind().sync();
-            InetSocketAddress address = (InetSocketAddress) sync.channel().localAddress();
+            log.info("[Server Bind Success] port {}", serverConfig.getListenPort());
             sync.channel().closeFuture().sync();
         } catch (Throwable ex) {
-            log.error("server bind exception", ex);
+            log.error("[Server Bind Failed] port {}", serverConfig.getListenPort(), ex);
             System.exit(-1);
+        } finally {
+            eventLoopGroupBoss.shutdownGracefully();
+            eventLoopGroupSelector.shutdownGracefully();
         }
-    }
-
-    public static NettyServer getGlobalInstance() {
-        return globalInstance;
-    }
-
-    public long getId() {
-        return id;
-    }
-
-    public NettyServerHandler getHandler() {
-        return handler;
     }
 }
