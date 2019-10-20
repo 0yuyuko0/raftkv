@@ -37,6 +37,8 @@ public class Utils {
     public static boolean isCollectionEquals(Collection a, Collection b) {
         if (isEmpty(a) && isEmpty(b))
             return true;
+        if (isEmpty(a) || isEmpty(b))
+            return false;
         return a.equals(b);
     }
 

@@ -1,4 +1,4 @@
-package com.yuyuko.raftkv.server.raft;
+package com.yuyuko.raftkv.server.statemachine;
 
 import com.yuyuko.raftkv.raft.read.ReadState;
 import com.yuyuko.raftkv.remoting.protocol.RequestCode;
@@ -7,25 +7,22 @@ import com.yuyuko.raftkv.remoting.protocol.body.ProposeMessage;
 import com.yuyuko.raftkv.remoting.protocol.body.ReadIndexMessage;
 import com.yuyuko.raftkv.remoting.protocol.codec.ProtostuffCodec;
 import com.yuyuko.raftkv.remoting.server.*;
-import com.yuyuko.raftkv.server.server.Server;
+import com.yuyuko.raftkv.server.core.Server;
 import com.yuyuko.selector.Channel;
-import io.netty.channel.ChannelHandlerContext;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class RaftKV implements ClientRequestProcessor {
+public class StateMachine implements ClientRequestProcessor {
     private final Channel<byte[]> proposeChan;
 
     private final Channel<byte[]> readIndexChan;
 
     private final Map<String, String> map = new ConcurrentHashMap<>();
 
-    private static volatile RaftKV globalInstance;
-
-    public RaftKV(Channel<byte[]> proposeChan, Channel<byte[]> commitChan,
-                  Channel<byte[]> readIndexChan, Channel<ReadState> readStateChan) {
+    public StateMachine(Channel<byte[]> proposeChan, Channel<byte[]> commitChan,
+                        Channel<byte[]> readIndexChan, Channel<ReadState> readStateChan) {
         this.proposeChan = proposeChan;
         this.readIndexChan = readIndexChan;
         Thread thread1 = new Thread(() -> readCommits(commitChan));

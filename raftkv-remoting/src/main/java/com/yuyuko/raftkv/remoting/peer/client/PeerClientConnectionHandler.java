@@ -33,7 +33,8 @@ public class PeerClientConnectionHandler extends ChannelInboundHandlerAdapter {
         if (!registered) {
             log.info("[Two Connection], peer {},close one", peerId);
             reconnectionManager.doNotReconnect(peerId);
-            ctx.writeAndFlush(PeerMessage.doNotReconnect(NettyPeerServer.getGlobalInstance().getId()));
+            ctx.writeAndFlush(PeerMessage.doNotReconnect(NettyPeerServer.getGlobalInstance().getId()))
+                    .addListener(ChannelFutureListener.CLOSE);
             return;
         }
 

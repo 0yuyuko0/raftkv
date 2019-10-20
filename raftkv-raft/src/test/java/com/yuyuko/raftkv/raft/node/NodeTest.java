@@ -169,7 +169,7 @@ class NodeTest {
     @Disabled
     void benchmark() throws InterruptedException {
         long start = System.currentTimeMillis();
-        benchmarkOneNode(100000);
+        benchmarkOneNode(70000);
         long end = System.currentTimeMillis();
         System.err.println(end - start + "ms");
     }

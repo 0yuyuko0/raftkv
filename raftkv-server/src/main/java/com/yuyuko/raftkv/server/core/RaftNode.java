@@ -1,7 +1,6 @@
-package com.yuyuko.raftkv.server.raft;
+package com.yuyuko.raftkv.server.core;
 
 import com.yuyuko.raftkv.raft.RaftException;
-import com.yuyuko.raftkv.raft.core.ConfState;
 import com.yuyuko.raftkv.raft.core.Config;
 import com.yuyuko.raftkv.raft.core.Entry;
 import com.yuyuko.raftkv.raft.core.Message;
@@ -12,9 +11,8 @@ import com.yuyuko.raftkv.raft.storage.Snapshot;
 import com.yuyuko.raftkv.raft.utils.Tuple;
 import com.yuyuko.raftkv.raft.utils.Utils;
 import com.yuyuko.raftkv.remoting.peer.PeerMessageProcessor;
-import com.yuyuko.raftkv.remoting.peer.PeerMessageSender;
-import com.yuyuko.raftkv.remoting.server.NettyServer;
-import com.yuyuko.raftkv.server.server.Server;
+import com.yuyuko.raftkv.remoting.server.ClientRequestProcessor;
+import com.yuyuko.raftkv.server.statemachine.StateMachine;
 import com.yuyuko.raftkv.server.utils.Triple;
 import com.yuyuko.selector.Channel;
 import com.yuyuko.selector.SelectionKey;
@@ -22,9 +20,7 @@ import com.yuyuko.selector.Selector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.reflect.Field;
 import java.util.*;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 import static com.yuyuko.selector.SelectionKey.read;
@@ -44,34 +40,32 @@ public class RaftNode implements PeerMessageProcessor {
 
     private List<Long> peers;
 
-    private long lastIndex;
-
-    private ConfState confState;
-
-    private long snapshotIndex;
-
     private long appliedIndex;
 
     private Node node;
 
     private MemoryStorage storage = MemoryStorage.newMemoryStorage();
 
+    private StateMachine stateMachine;
+
     private Timer timer = new Timer("TickTask", true);
 
-    public static Triple<Channel<byte[]>, Channel<ReadState>, PeerMessageProcessor> newRaftNode(long id,
-                                                                                                List<Long> peers,
-                                                                                                Channel<byte[]> proposeChan,
-                                                                                                Channel<byte[]> readIndexChan) {
+    public static Tuple<PeerMessageProcessor, ClientRequestProcessor> newRaftNode(long id,
+                                                                                  List<Long> peers) {
         RaftNode raftNode = new RaftNode();
-        raftNode.proposeChan = proposeChan;
-        raftNode.readIndexChan = readIndexChan;
+        raftNode.proposeChan = new Channel<>();
+        raftNode.readIndexChan = new Channel<>();
         raftNode.commitChan = new Channel<>();
         raftNode.readStateChan = new Channel<>();
         raftNode.id = id;
         raftNode.peers = peers;
 
+        raftNode.stateMachine = new StateMachine(raftNode.proposeChan, raftNode.commitChan,
+                raftNode.readIndexChan, raftNode.readStateChan);
+
         raftNode.startRaft();
-        return new Triple<>(raftNode.commitChan, raftNode.readStateChan, raftNode);
+
+        return new Tuple<>(raftNode, raftNode.stateMachine);
     }
 
     private void startRaft() {
@@ -95,8 +89,6 @@ public class RaftNode implements PeerMessageProcessor {
 
     private void serveChannels() {
         Snapshot snapshot = storage.snapshot();
-        confState = snapshot.getMetadata().getConfState();
-        snapshotIndex = snapshot.getMetadata().getIndex();
         appliedIndex = snapshot.getMetadata().getIndex();
 
         final Channel<Object> tickChan = new Channel<>();

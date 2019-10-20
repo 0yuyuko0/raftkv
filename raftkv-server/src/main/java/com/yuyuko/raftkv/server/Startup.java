@@ -3,20 +3,16 @@ package com.yuyuko.raftkv.server;
 import com.yuyuko.raftkv.raft.read.ReadState;
 import com.yuyuko.raftkv.raft.utils.Tuple;
 import com.yuyuko.raftkv.remoting.peer.PeerMessageProcessor;
-import com.yuyuko.raftkv.remoting.peer.client.NettyPeerClient;
-import com.yuyuko.raftkv.remoting.peer.client.NettyPeerClientConfig;
 import com.yuyuko.raftkv.remoting.peer.PeerNode;
 import com.yuyuko.raftkv.remoting.peer.server.NettyPeerServerConfig;
 import com.yuyuko.raftkv.remoting.server.ClientRequestProcessor;
-import com.yuyuko.raftkv.remoting.server.NettyServerConfig;
-import com.yuyuko.raftkv.server.raft.RaftKV;
-import com.yuyuko.raftkv.server.raft.RaftNode;
-import com.yuyuko.raftkv.server.server.Server;
+import com.yuyuko.raftkv.server.core.RaftNode;
+import com.yuyuko.raftkv.server.core.Server;
+import com.yuyuko.raftkv.server.statemachine.StateMachine;
 import com.yuyuko.raftkv.server.utils.Triple;
 import com.yuyuko.selector.Channel;
 import org.apache.commons.cli.*;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -35,22 +31,10 @@ public class Startup {
 
     private static Server createServer(long id, int port, List<PeerNode> peerNodes) {
 
-        Channel<byte[]> proposeChan = new Channel<>();
+        Tuple<PeerMessageProcessor, ClientRequestProcessor> tuple = RaftNode.newRaftNode(id,
+                peerNodes.stream().map(PeerNode::getId).collect(Collectors.toList()));
 
-        Channel<byte[]> readIndexChan = new Channel<>();
-
-        Triple<Channel<byte[]>, Channel<ReadState>, PeerMessageProcessor> triple =
-                RaftNode.newRaftNode(id,
-                        peerNodes.stream().map(PeerNode::getId).collect(Collectors.toList()),
-                        proposeChan, readIndexChan);
-
-        ClientRequestProcessor raftKV = new RaftKV(
-                proposeChan,
-                triple.getFirst(),
-                readIndexChan,
-                triple.getSecond());
-
-        return new Server(id, port, raftKV, peerNodes, triple.getThird());
+        return new Server(id, port, tuple.getSecond(), peerNodes, tuple.getFirst());
     }
 
     /**

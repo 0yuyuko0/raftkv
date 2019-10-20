@@ -4,7 +4,13 @@ import com.dyuproject.protostuff.LinkedBuffer;
 import com.dyuproject.protostuff.ProtostuffIOUtil;
 import com.dyuproject.protostuff.Schema;
 import com.dyuproject.protostuff.runtime.RuntimeSchema;
+import io.netty.channel.SimpleChannelInboundHandler;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 public class ProtostuffCodec implements JavaCodec {
@@ -47,5 +53,30 @@ public class ProtostuffCodec implements JavaCodec {
         o = schema.newMessage();
         ProtostuffIOUtil.mergeFrom(bytes, o, schema);
         return o;
+    }
+
+    public static class SimpleObject {
+        int a;
+        float b;
+
+        public SimpleObject(int a, float b) {
+            this.a = a;
+            this.b = b;
+        }
+
+        @Override
+        public String toString() {
+            return "SimpleObject{" +
+                    "a=" + a +
+                    ", b=" + b +
+                    '}';
+        }
+    }
+
+    public static void main(String[] args) {
+
+        byte[] bytes = ProtostuffCodec.getInstance().encode(List.of(new SimpleObject(1, 2),
+                new SimpleObject(2, 3)));
+        ProtostuffCodec.getInstance().decode(bytes, List.class).forEach(System.out::println);
     }
 }
