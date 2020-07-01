@@ -17,7 +17,7 @@
     <properties>
         <selector.version>1.1.1</selector.version>
         <slf4j-api.version>1.7.25</slf4j-api.version>
-        <log4j-slf4j.version>2.9.1</log4j-slf4j.version>
+        <log4j-slf4j.version>2.13.3</log4j-slf4j.version>
         <junit-platform-commons.version>1.4.1</junit-platform-commons.version>
         <junit-jupiter.version>5.4.0</junit-jupiter.version>
         <junit-vintage-engine.version>5.4.0</junit-vintage-engine.version>
